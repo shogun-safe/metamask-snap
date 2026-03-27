@@ -1,6 +1,6 @@
 {
   "name": "@shogun-safe/metamask-snap",
-  "version": "0.1.0",
+  "version": "0.1.1-beta.0",
   "description": "Snap package for Shogun Safe",
   "repository": {
     "type": "git",

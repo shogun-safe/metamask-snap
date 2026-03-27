@@ -1,5 +1,5 @@
 {
-  "version": "0.1.0",
+  "version": "0.1.1-beta.0",
   "description": "Snap package for Shogun Safe",
   "proposedName": "Shogun Safe",
   "repository": {
@@ -7,7 +7,7 @@
     "url": "https://github.com/shogun-safe/metamask-snap.git"
   },
   "source": {
-    "shasum": "eiCFFYptYW0h//keSVFkPW7estd5HIdM4DOzGtZBZjU=",
+    "shasum": "4zXNUeL9qWIBbhA58XMzpwMCufgifqv48hOC+frFtM0=",
     "location": {
       "npm": {
         "filePath": "dist/bundle.js",
