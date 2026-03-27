@@ -1,0 +1,34 @@
+{
+  "version": "0.1.0",
+  "description": "Snap package for Shogun Safe",
+  "proposedName": "Shogun Safe",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/shogun-safe/metamask-snap.git"
+  },
+  "source": {
+    "shasum": "eiCFFYptYW0h//keSVFkPW7estd5HIdM4DOzGtZBZjU=",
+    "location": {
+      "npm": {
+        "filePath": "dist/bundle.js",
+        "packageName": "@shogun-safe/metamask-snap",
+        "registry": "https://registry.npmjs.org"
+      }
+    }
+  },
+  "initialPermissions": {
+    "snap_dialog": {},
+    "endowment:rpc": {
+      "dapps": true,
+      "snaps": false
+    },
+    "endowment:transaction-insight": {
+      "allowTransactionOrigin": true
+    },
+    "endowment:network-access": {},
+    "endowment:page-home": {},
+    "snap_manageState": {}
+  },
+  "platformVersion": "9.3.0",
+  "manifestVersion": "0.1"
+}
