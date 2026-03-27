@@ -1,6 +1,6 @@
 {
   "name": "@shogun-safe/metamask-snap",
-  "version": "0.1.1-beta.0",
+  "version": "0.1.0",
   "description": "Snap package for Shogun Safe",
   "repository": {
     "type": "git",
@@ -15,11 +15,11 @@
   "scripts": {
     "allow-scripts": "yarn workspace root allow-scripts",
     "build": "mm-snap build",
-    "build:dev": "REQUESTS_URL='https://api.dev-cerberus.click/' mm-snap build",
-    "build:prod": "REQUESTS_URL='https://api.cerberus.click/' mm-snap build",
     "build:clean": "yarn clean && yarn build",
     "build:clean:dev": "yarn clean && yarn build:dev",
     "build:clean:prod": "yarn clean && yarn build:prod",
+    "build:dev": "REQUESTS_URL='https://api.dev-cerberus.click/' mm-snap build",
+    "build:prod": "REQUESTS_URL='https://api.cerberus.click/' mm-snap build",
     "clean": "rimraf dist",
     "lint": "yarn lint:eslint && yarn lint:misc --check",
     "lint:eslint": "eslint . --cache --ext js,ts",
@@ -30,7 +30,7 @@
     "start": "mm-snap watch",
     "test": "jest",
     "version": "node scripts/sync-version.js",
-    "postversion": "echo 'バージョン更新と同期が完了しました。git add/commit/push を忘れないでください。'"
+    "postversion": "echo 'Version bump and sync complete. Remember to git add, commit, and push.'"
   },
   "dependencies": {
     "@ethereumjs/common": "^3.2.0",

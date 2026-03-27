@@ -1,19 +1,6 @@
-/* eslint-disable @typescript-eslint/switch-exhaustiveness-check */
-/* eslint-disable prefer-destructuring */
-/* eslint-disable id-denylist */
-/* eslint-disable @typescript-eslint/naming-convention */
-/* eslint-disable no-nested-ternary */
-/* eslint-disable @typescript-eslint/no-unused-vars */
-/* eslint-disable no-eq-null */
-/* eslint-disable curly */
-/* eslint-disable @typescript-eslint/prefer-nullish-coalescing */
-/* eslint-disable no-negated-condition */
-/* eslint-disable jsdoc/require-jsdoc */
-/* eslint-disable prettier/prettier */
-/* eslint-disable id-length */
-/* eslint-disable no-restricted-globals */
-/* eslint-disable @typescript-eslint/consistent-type-imports */
-/* eslint-disable import-x/order */
+import { Common } from '@ethereumjs/common';
+import { TransactionFactory } from '@ethereumjs/tx';
+import { bufferToHex } from '@ethereumjs/util';
 import {
   SeverityLevel,
   UserInputEventType,
@@ -23,11 +10,7 @@ import {
   type OnUserInputHandler,
   type Transaction,
 } from '@metamask/snaps-sdk';
-import { Common } from '@ethereumjs/common';
-import { TransactionFactory } from '@ethereumjs/tx';
-import { bufferToHex } from '@ethereumjs/util';
-import { formatSummaryStatus, toChecksSummary } from './lib/checks-summary';
-import { rlpHexToKeccak256Hash } from './utils/hash';
+import type { TextColors } from '@metamask/snaps-sdk/jsx';
 import {
   Box,
   Button,
@@ -42,9 +25,12 @@ import {
   Input,
   Row,
   Section,
-  TextColors,
 } from '@metamask/snaps-sdk/jsx';
 
+import { formatSummaryStatus, toChecksSummary } from './lib/checks-summary';
+import { rlpHexToKeccak256Hash } from './utils/hash';
+
+/** Base URL for Cerberus HTTP APIs (from build-time `REQUESTS_URL` or default). */
 const REQUESTS_URL = process.env.REQUESTS_URL ?? 'https://api.localhost';
 
 type RawTransactionPayload = {
@@ -52,7 +38,7 @@ type RawTransactionPayload = {
   chain: string;
   from: string;
   origin: string;
-  timestamp: number; // seconds
+  timestamp: number;
 };
 
 type RequestResponse = {
@@ -84,11 +70,31 @@ type RunChecksResult = {
   debug?: string;
 };
 
+/**
+ * Returns whether the given check status represents an on-chain transaction phase.
+ *
+ * @param s - Raw check status string from the API.
+ * @returns `true` if `s` is one of the on-chain transaction statuses.
+ */
 const isOnchainStatus = (s: string): boolean =>
-  s === 'onchain_tx_processing' || s === 'onchain_tx_success' || s === 'onchain_tx_failed';
+  s === 'onchain_tx_processing' ||
+  s === 'onchain_tx_success' ||
+  s === 'onchain_tx_failed';
 
+/**
+ * Converts unknown thrown values into a safe string.
+ *
+ * @param error - Unknown thrown value.
+ * @returns Error message text.
+ */
+const getErrorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
+
+/** `snap_manageState` key for the persisted tx-hash → request-id map. */
 const TX_HASH_TO_REQUEST_ID_KEY = 'cerberus_txHashToRequestId';
+/** `snap_manageState` key for the JWT session (access / refresh tokens), written by the login UI. */
 const CERBERUS_SESSION_KEY = 'cerberus_session';
+/** Map keys: Keccak-256 hash of RLP/hex (hex string); values: request id. */
 type TxHashToRequestIdState = Record<string, number>;
 
 type CerberusSession = {
@@ -102,6 +108,11 @@ type CerberusState = {
   [CERBERUS_SESSION_KEY]?: CerberusSession;
 };
 
+/**
+ * Reads Cerberus-related persisted state via `snap_manageState`.
+ *
+ * @returns Parsed Cerberus state, or `null` if unset.
+ */
 async function getCerberusState(): Promise<CerberusState | null> {
   const state = await snap.request({
     method: 'snap_manageState',
@@ -110,7 +121,15 @@ async function getCerberusState(): Promise<CerberusState | null> {
   return state as CerberusState | null;
 }
 
-async function updateCerberusState(update: Partial<CerberusState>): Promise<void> {
+/**
+ * Updates `snap_manageState`, merging into the current snapshot.
+ * When `TX_HASH_TO_REQUEST_ID_KEY` is present in `update`, the map is replaced (not merged) so removals are applied.
+ *
+ * @param update - Partial state to merge or replace.
+ */
+async function updateCerberusState(
+  update: Partial<CerberusState>,
+): Promise<void> {
   const current = await getCerberusState();
   const newState: CerberusState = {
     ...current,
@@ -132,16 +151,28 @@ async function updateCerberusState(update: Partial<CerberusState>): Promise<void
   });
 }
 
+/**
+ * Returns the stored access token from managed state, or `null` if not logged in.
+ */
 async function getStoredAccessToken(): Promise<string | null> {
   const state = await getCerberusState();
   const token = state?.[CERBERUS_SESSION_KEY]?.accessToken;
-  return (typeof token === 'string' && token.length > 0) ? token : null;
+  return typeof token === 'string' && token.length > 0 ? token : null;
 }
 
+/**
+ * Calls `POST /auth/refresh`; on success updates managed state and returns the new access token.
+ *
+ * @returns New access token, or `null` on failure.
+ */
 async function tryRefreshSession(): Promise<string | null> {
   const state = await getCerberusState();
   const refreshToken = state?.[CERBERUS_SESSION_KEY]?.refreshToken;
-  if (typeof refreshToken !== 'string' || !refreshToken.length || !REQUESTS_URL) {
+  if (
+    typeof refreshToken !== 'string' ||
+    !refreshToken.length ||
+    !REQUESTS_URL
+  ) {
     return null;
   }
   try {
@@ -152,7 +183,9 @@ async function tryRefreshSession(): Promise<string | null> {
     if (!res.ok) {
       return null;
     }
-    const data = (await res.json().catch(() => ({}))) as { session?: AuthSession };
+    const data = (await res.json().catch(() => ({}))) as {
+      session?: AuthSession;
+    };
     if (!data?.session?.accessToken) {
       return null;
     }
@@ -160,38 +193,96 @@ async function tryRefreshSession(): Promise<string | null> {
       [CERBERUS_SESSION_KEY]: sessionToCerberusSession(data.session),
     });
     return data.session.accessToken;
-  } catch {
+  } catch (error) {
+    getErrorMessage(error);
     return null;
   }
 }
 
+/**
+ * Context for the Shogun Safe home UI passed to `snap_createInterface`.
+ * `fromDialog` is `true` when opened from the `showLoginScreen` RPC (dialog flow).
+ */
 type CerberusHomeContext =
   | { kind: 'cerberus-home'; step: 'login'; fromDialog?: boolean }
-  | { kind: 'cerberus-home'; step: '2fa'; tempToken: string; mfaMethod?: string; fromDialog?: boolean }
-  | { kind: 'cerberus-home'; step: '2fa-recovery'; tempToken: string; mfaMethod?: string; fromDialog?: boolean }
-  | { kind: 'cerberus-home'; step: 'logged_in'; user?: { email?: string; displayName?: string }; fromDialog?: boolean };
+  | {
+      kind: 'cerberus-home';
+      step: '2fa';
+      tempToken: string;
+      mfaMethod?: string;
+      fromDialog?: boolean;
+    }
+  | {
+      kind: 'cerberus-home';
+      step: '2fa-recovery';
+      tempToken: string;
+      mfaMethod?: string;
+      fromDialog?: boolean;
+    }
+  | {
+      kind: 'cerberus-home';
+      step: 'logged_in';
+      user?: { email?: string; displayName?: string };
+      fromDialog?: boolean;
+    };
 
-type AuthSession = { accessToken: string; refreshToken?: string; expiresIn?: number; user?: AuthUser };
-type AuthUser = { id?: string; email?: string; displayName?: string; role?: string };
+/** Auth API session shape (aligned with OpenAPI). */
+type AuthSession = {
+  accessToken: string;
+  refreshToken?: string;
+  expiresIn?: number;
+  user?: AuthUser;
+};
+type AuthUser = {
+  id?: string;
+  email?: string;
+  displayName?: string;
+  role?: string;
+};
 
+/** Response from `GET /auth/2fa/status` (2FA status on the logged-in home view). */
 type MfaStatus = { mfaEnabled: boolean };
 
+/**
+ * Calls `GET /auth/2fa/status` with a Bearer token and returns 2FA status, or `null` on failure.
+ *
+ * @param accessToken - JWT access token.
+ * @returns MFA flags, or `null` if the request fails.
+ */
 async function fetch2faStatus(accessToken: string): Promise<MfaStatus | null> {
-  if (!REQUESTS_URL) return null;
+  if (!REQUESTS_URL) {
+    return null;
+  }
   try {
     const res = await fetch(`${REQUESTS_URL}/auth/2fa/status`, {
       method: 'GET',
       headers: { Authorization: `Bearer ${accessToken}` },
     });
-    if (!res.ok) return null;
-    const data = (await res.json().catch(() => ({}))) as { mfaEnabled?: boolean };
-    return typeof data.mfaEnabled === 'boolean' ? { mfaEnabled: data.mfaEnabled } : null;
-  } catch {
+    if (!res.ok) {
+      return null;
+    }
+    const data = (await res.json().catch(() => ({}))) as {
+      mfaEnabled?: boolean;
+    };
+    return typeof data.mfaEnabled === 'boolean'
+      ? { mfaEnabled: data.mfaEnabled }
+      : null;
+  } catch (error) {
+    getErrorMessage(error);
     return null;
   }
 }
 
-async function saveTxHashRequestId(rlpHex: string, requestId: number): Promise<void> {
+/**
+ * Before signing via the approval flow, stores the RLP hash → request id pair in state (merged into the existing map).
+ *
+ * @param rlpHex - Raw transaction RLP hex used to derive the state key.
+ * @param requestId - Request id to associate with this transaction hash.
+ */
+async function saveTxHashRequestId(
+  rlpHex: string,
+  requestId: number,
+): Promise<void> {
   const hash = rlpHexToKeccak256Hash(rlpHex);
   const state = await getCerberusState();
   const currentMap = state?.[TX_HASH_TO_REQUEST_ID_KEY] ?? {};
@@ -200,7 +291,15 @@ async function saveTxHashRequestId(rlpHex: string, requestId: number): Promise<v
   });
 }
 
-async function getRequestIdByTxHashAndRemove(rlpHex: string): Promise<number | null> {
+/**
+ * Looks up the request id for the given RLP hex hash, removes that entry from state, and returns the id.
+ *
+ * @param rlpHex - Raw transaction RLP hex.
+ * @returns The request id if present, otherwise `null`.
+ */
+async function getRequestIdByTxHashAndRemove(
+  rlpHex: string,
+): Promise<number | null> {
   const hash = rlpHexToKeccak256Hash(rlpHex);
   const state = await getCerberusState();
   const map = state?.[TX_HASH_TO_REQUEST_ID_KEY];
@@ -214,11 +313,19 @@ async function getRequestIdByTxHashAndRemove(rlpHex: string): Promise<number | n
   return requestId;
 }
 
+/**
+ * Inner box content for the login form (first child of `Container`; same structure for `updateInterface` on error).
+ *
+ * @param errorMessage - Optional error banner text.
+ * @returns Login form JSX fragment.
+ */
 function cerberusHomeLoginBoxContent(errorMessage?: string): JSX.Element {
   return (
     <Box>
       {errorMessage ? (
-        <Banner title="Error" severity="danger"><Text>{errorMessage}</Text></Banner>
+        <Banner title="Error" severity="danger">
+          <Text>{errorMessage}</Text>
+        </Banner>
       ) : null}
       <Heading>Shogun Safe Login</Heading>
       <Text>Please log in with your email and password.</Text>
@@ -234,43 +341,78 @@ function cerberusHomeLoginBoxContent(errorMessage?: string): JSX.Element {
   );
 }
 
+/**
+ * Home page: login form when not authenticated. The second child of `Container` must be `Footer`.
+ * When `fromDialog` is true, also shows Close (footer children cannot be `null`).
+ *
+ * @param fromDialog - Whether the UI was opened from the login dialog RPC.
+ * @returns Full login screen JSX.
+ */
 function renderCerberusHomeLogin(fromDialog?: boolean): JSX.Element {
   return (
     <Container>
       {cerberusHomeLoginBoxContent()}
       {fromDialog ? (
         <Footer>
-          <Button name="login" variant="primary">Log in</Button>
+          <Button name="login" variant="primary">
+            Log in
+          </Button>
           <Button name="close">Close</Button>
         </Footer>
       ) : (
         <Footer>
-          <Button name="login" variant="primary">Log in</Button>
+          <Button name="login" variant="primary">
+            Log in
+          </Button>
         </Footer>
       )}
     </Container>
   );
 }
 
-function renderCerberusHomeLoginWithError(errorMessage: string, fromDialog?: boolean): JSX.Element {
+/**
+ * Login screen with an error banner (for `snap_updateInterface`). `Container` has only box + footer children.
+ *
+ * @param errorMessage - Error text to show in the banner.
+ * @param fromDialog - Whether opened from the dialog flow (adds Close when true).
+ * @returns Login screen JSX with error.
+ */
+function renderCerberusHomeLoginWithError(
+  errorMessage: string,
+  fromDialog?: boolean,
+): JSX.Element {
   return (
     <Container>
       {cerberusHomeLoginBoxContent(errorMessage)}
       {fromDialog ? (
         <Footer>
-          <Button name="login" variant="primary">Log in</Button>
+          <Button name="login" variant="primary">
+            Log in
+          </Button>
           <Button name="close">Close</Button>
         </Footer>
       ) : (
         <Footer>
-          <Button name="login" variant="primary">Log in</Button>
+          <Button name="login" variant="primary">
+            Log in
+          </Button>
         </Footer>
       )}
     </Container>
   );
 }
 
-function cerberusHome2FABoxContent(mfaMethod?: string, errorMessage?: string): JSX.Element {
+/**
+ * Inner box content for the 2FA code form (same structure when passing errors to `updateInterface`).
+ *
+ * @param mfaMethod - `totp` or other; affects helper copy.
+ * @param errorMessage - Optional error banner text.
+ * @returns 2FA form JSX fragment.
+ */
+function cerberusHome2FABoxContent(
+  mfaMethod?: string,
+  errorMessage?: string,
+): JSX.Element {
   const methodLabel =
     mfaMethod === 'totp'
       ? '6-digit code from your authenticator app'
@@ -278,7 +420,9 @@ function cerberusHome2FABoxContent(mfaMethod?: string, errorMessage?: string): J
   return (
     <Box>
       {errorMessage ? (
-        <Banner title="Error" severity="danger"><Text>{errorMessage}</Text></Banner>
+        <Banner title="Error" severity="danger">
+          <Text>{errorMessage}</Text>
+        </Banner>
       ) : null}
       <Heading>2FA Verification</Heading>
       <Text>Enter the {methodLabel}.</Text>
@@ -291,35 +435,67 @@ function cerberusHome2FABoxContent(mfaMethod?: string, errorMessage?: string): J
   );
 }
 
+/**
+ * Home page: 2FA code entry (TOTP or email code). Second child of `Container` is `Footer`.
+ *
+ * @param mfaMethod - MFA method hint for UI copy.
+ * @returns Full 2FA screen JSX.
+ */
 function renderCerberusHome2FA(mfaMethod?: string): JSX.Element {
   return (
     <Container>
       {cerberusHome2FABoxContent(mfaMethod)}
       <Footer>
-        <Button name="confirm" variant="primary">Confirm</Button>
+        <Button name="confirm" variant="primary">
+          Confirm
+        </Button>
         <Button name="switchToRecovery">Use recovery code</Button>
       </Footer>
     </Container>
   );
 }
 
-function renderCerberusHome2FAWithError(mfaMethod?: string, errorMessage?: string): JSX.Element {
+/**
+ * 2FA screen with an error banner (for `snap_updateInterface`).
+ *
+ * @param mfaMethod - MFA method hint for UI copy.
+ * @param errorMessage - Error text for the banner.
+ * @returns 2FA screen JSX with error.
+ */
+function renderCerberusHome2FAWithError(
+  mfaMethod?: string,
+  errorMessage?: string,
+): JSX.Element {
   return (
     <Container>
       {cerberusHome2FABoxContent(mfaMethod, errorMessage)}
       <Footer>
-        <Button name="confirm" variant="primary">Confirm</Button>
+        <Button name="confirm" variant="primary">
+          Confirm
+        </Button>
         <Button name="switchToRecovery">Use recovery code</Button>
       </Footer>
     </Container>
   );
 }
 
-function cerberusHome2FARecoveryBoxContent(mfaMethod?: string, errorMessage?: string): JSX.Element {
+/**
+ * Inner box content for the recovery-code form (same structure for error `updateInterface` calls).
+ *
+ * @param mfaMethod - Reserved for future MFA-specific copy (currently unused in the layout).
+ * @param errorMessage - Optional error banner text.
+ * @returns Recovery form JSX fragment.
+ */
+function cerberusHome2FARecoveryBoxContent(
+  mfaMethod?: string,
+  errorMessage?: string,
+): JSX.Element {
   return (
     <Box>
       {errorMessage ? (
-        <Banner title="Error" severity="danger"><Text>{errorMessage}</Text></Banner>
+        <Banner title="Error" severity="danger">
+          <Text>{errorMessage}</Text>
+        </Banner>
       ) : null}
       <Heading>2FA Verification</Heading>
       <Text>Enter your recovery code to sign in.</Text>
@@ -332,30 +508,60 @@ function cerberusHome2FARecoveryBoxContent(mfaMethod?: string, errorMessage?: st
   );
 }
 
+/**
+ * Home page: sign in with a recovery code.
+ *
+ * @param mfaMethod - MFA method hint for related flows.
+ * @returns Recovery-code screen JSX.
+ */
 function renderCerberusHome2FARecovery(mfaMethod?: string): JSX.Element {
   return (
     <Container>
       {cerberusHome2FARecoveryBoxContent(mfaMethod)}
       <Footer>
-        <Button name="confirm" variant="primary">Confirm</Button>
+        <Button name="confirm" variant="primary">
+          Confirm
+        </Button>
         <Button name="switchToAuthCode">Use auth code</Button>
       </Footer>
     </Container>
   );
 }
 
-function renderCerberusHome2FARecoveryWithError(mfaMethod?: string, errorMessage?: string): JSX.Element {
+/**
+ * Recovery-code screen with an error banner (for `snap_updateInterface`).
+ *
+ * @param mfaMethod - MFA method hint for related flows.
+ * @param errorMessage - Error text for the banner.
+ * @returns Recovery screen JSX with error.
+ */
+function renderCerberusHome2FARecoveryWithError(
+  mfaMethod?: string,
+  errorMessage?: string,
+): JSX.Element {
   return (
     <Container>
       {cerberusHome2FARecoveryBoxContent(mfaMethod, errorMessage)}
       <Footer>
-        <Button name="confirm" variant="primary">Confirm</Button>
+        <Button name="confirm" variant="primary">
+          Confirm
+        </Button>
         <Button name="switchToAuthCode">Use auth code</Button>
       </Footer>
     </Container>
   );
 }
 
+/**
+ * Home page: logged-in view (user, 2FA status, logout). When `fromDialog` is true, also shows Close.
+ *
+ * @param user - Optional user profile for display.
+ * @param user.email - Optional email for display.
+ * @param user.displayName - Optional display name.
+ * @param mfaStatus - Result of `GET /auth/2fa/status`, or `null` if unknown.
+ * @param fromDialog - Whether opened from the dialog flow (adds Close when true).
+ * @returns Logged-in home JSX.
+ */
 function renderCerberusHomeLoggedIn(
   user?: { email?: string; displayName?: string },
   mfaStatus?: MfaStatus | null,
@@ -364,19 +570,27 @@ function renderCerberusHomeLoggedIn(
   const userName = user?.displayName?.trim() || user?.email?.trim() || '—';
   const twoFaSetUp = mfaStatus?.mfaEnabled === true;
   const twoFaNotSetUp = mfaStatus?.mfaEnabled === false;
-  const twoFaLabel = twoFaSetUp ? '2FA: Set up' : twoFaNotSetUp ? '2FA: Not set up' : null;
+  const twoFaLabel = twoFaSetUp
+    ? '2FA: Set up'
+    : twoFaNotSetUp
+      ? '2FA: Not set up'
+      : null;
   const twoFaColor: TextColors = twoFaSetUp ? 'success' : 'warning';
   return (
     <Container>
       <Box>
         <Heading>Shogun Safe</Heading>
         <Text>Logged-in user</Text>
-        <Text><Bold>{userName}</Bold></Text>
-        {twoFaLabel != null ? <Text color={twoFaColor}>{twoFaLabel}</Text> : null}
+        <Text>
+          <Bold>{userName}</Bold>
+        </Text>
+        {twoFaLabel != null ? (
+          <Text color={twoFaColor}>{twoFaLabel}</Text>
+        ) : null}
         {twoFaNotSetUp ? (
           <Text>
-            To use Shogun Safe Snap features, please set up two-factor authentication
-            on the Shogun Safe dashboard.
+            To use Shogun Safe Snap features, please set up two-factor
+            authentication on the Shogun Safe dashboard.
           </Text>
         ) : null}
       </Box>
@@ -394,7 +608,17 @@ function renderCerberusHomeLoggedIn(
   );
 }
 
-async function authLogin(email: string, password: string): Promise<
+/**
+ * Calls `POST /auth/login` and returns either a 2FA challenge or an authenticated session.
+ *
+ * @param email - User email.
+ * @param password - User password.
+ * @returns Discriminated result: 2FA required, session, or error.
+ */
+async function authLogin(
+  email: string,
+  password: string,
+): Promise<
   | { type: '2fa'; tempToken: string; mfaMethod?: string }
   | { type: 'session'; session: AuthSession }
   | { type: 'error'; message: string }
@@ -410,23 +634,42 @@ async function authLogin(email: string, password: string): Promise<
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      return { type: 'error', message: (data?.message as string) || `HTTP ${res.status}` };
+      return {
+        type: 'error',
+        message: (data?.message as string) || `HTTP ${res.status}`,
+      };
     }
     if (data.tempToken) {
-      return { type: '2fa', tempToken: data.tempToken, mfaMethod: data.mfaMethod };
+      return {
+        type: '2fa',
+        tempToken: data.tempToken,
+        mfaMethod: data.mfaMethod,
+      };
     }
     if (data.session) {
       return { type: 'session', session: data.session };
     }
     return { type: 'error', message: 'Invalid response format.' };
   } catch (e) {
-    return { type: 'error', message: e instanceof Error ? e.message : String(e) };
+    return {
+      type: 'error',
+      message: e instanceof Error ? e.message : String(e),
+    };
   }
 }
 
-async function auth2faVerify(tempToken: string, code: string): Promise<
-  | { type: 'session'; session: AuthSession }
-  | { type: 'error'; message: string }
+/**
+ * Calls `POST /auth/2fa/verify` and returns a session on success.
+ *
+ * @param tempToken - Temporary token from the login step.
+ * @param code - 2FA code entered by the user.
+ * @returns Session or error result.
+ */
+async function auth2faVerify(
+  tempToken: string,
+  code: string,
+): Promise<
+  { type: 'session'; session: AuthSession } | { type: 'error'; message: string }
 > {
   if (!REQUESTS_URL) {
     return { type: 'error', message: 'REQUESTS_URL is not configured.' };
@@ -439,20 +682,35 @@ async function auth2faVerify(tempToken: string, code: string): Promise<
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      return { type: 'error', message: (data?.message as string) || `HTTP ${res.status}` };
+      return {
+        type: 'error',
+        message: (data?.message as string) || `HTTP ${res.status}`,
+      };
     }
     if (data.session) {
       return { type: 'session', session: data.session };
     }
     return { type: 'error', message: 'Invalid response format.' };
   } catch (e) {
-    return { type: 'error', message: e instanceof Error ? e.message : String(e) };
+    return {
+      type: 'error',
+      message: e instanceof Error ? e.message : String(e),
+    };
   }
 }
 
-async function auth2faRecovery(tempToken: string, recoveryCode: string): Promise<
-  | { type: 'session'; session: AuthSession }
-  | { type: 'error'; message: string }
+/**
+ * Calls `POST /auth/2fa/recovery` and returns a session on success.
+ *
+ * @param tempToken - Temporary token from the login step.
+ * @param recoveryCode - Recovery code entered by the user.
+ * @returns Session or error result.
+ */
+async function auth2faRecovery(
+  tempToken: string,
+  recoveryCode: string,
+): Promise<
+  { type: 'session'; session: AuthSession } | { type: 'error'; message: string }
 > {
   if (!REQUESTS_URL) {
     return { type: 'error', message: 'REQUESTS_URL is not configured.' };
@@ -465,18 +723,32 @@ async function auth2faRecovery(tempToken: string, recoveryCode: string): Promise
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
-      return { type: 'error', message: (data?.message as string) || `HTTP ${res.status}` };
+      return {
+        type: 'error',
+        message: (data?.message as string) || `HTTP ${res.status}`,
+      };
     }
     if (data.session) {
       return { type: 'session', session: data.session };
     }
     return { type: 'error', message: 'Invalid response format.' };
   } catch (e) {
-    return { type: 'error', message: e instanceof Error ? e.message : String(e) };
+    return {
+      type: 'error',
+      message: e instanceof Error ? e.message : String(e),
+    };
   }
 }
 
-async function authLogout(accessToken: string): Promise<{ ok: boolean; error?: string }> {
+/**
+ * Calls `POST /auth/logout` with a Bearer access token.
+ *
+ * @param accessToken - JWT access token.
+ * @returns Whether the server acknowledged logout, plus optional error text.
+ */
+async function authLogout(
+  accessToken: string,
+): Promise<{ ok: boolean; error?: string }> {
   if (!REQUESTS_URL) {
     return { ok: false, error: 'REQUESTS_URL is not configured.' };
   }
@@ -495,6 +767,12 @@ async function authLogout(accessToken: string): Promise<{ ok: boolean; error?: s
   }
 }
 
+/**
+ * Maps an API `AuthSession` into the subset stored in `snap_manageState`.
+ *
+ * @param session - Session returned by the auth API.
+ * @returns Persisted Cerberus session fields.
+ */
 function sessionToCerberusSession(session: AuthSession): CerberusSession {
   return {
     accessToken: session.accessToken,
@@ -505,10 +783,16 @@ function sessionToCerberusSession(session: AuthSession): CerberusSession {
   };
 }
 
+/**
+ * MetaMask home page entry: shows login or logged-in UI depending on stored session.
+ *
+ * @returns Interface id for the created home UI.
+ */
 export const onHomePage: OnHomePageHandler = async () => {
   const state = await getCerberusState();
   const session = state?.[CERBERUS_SESSION_KEY];
-  const hasSession = typeof session?.accessToken === 'string' && session.accessToken.length > 0;
+  const hasSession =
+    typeof session?.accessToken === 'string' && session.accessToken.length > 0;
 
   let ui: JSX.Element;
   let context: CerberusHomeContext;
@@ -532,6 +816,12 @@ export const onHomePage: OnHomePageHandler = async () => {
   return { id: interfaceId };
 };
 
+/**
+ * Posts a raw transaction to `POST /snap/tx/insights` using the stored access token (with refresh on 401).
+ *
+ * @param payload - Raw tx and metadata for the insights API.
+ * @returns Parsed request id on success, or a debug string on failure.
+ */
 const postRawTransaction = async (
   payload: RawTransactionPayload,
 ): Promise<PostResult> => {
@@ -593,6 +883,12 @@ const postRawTransaction = async (
   }
 };
 
+/**
+ * Starts the checks pipeline for a request (`POST .../checks/start`).
+ *
+ * @param requestId - Cerberus request id.
+ * @returns Initial check progress JSON on success, or `null` on failure.
+ */
 const startChecks = async (requestId: number) => {
   const accessToken = await getStoredAccessToken();
   if (!accessToken) {
@@ -626,7 +922,8 @@ const startChecks = async (requestId: number) => {
       return null;
     }
     return (await response.json()) as CheckProgress;
-  } catch {
+  } catch (error) {
+    getErrorMessage(error);
     return null;
   }
 };
@@ -636,6 +933,7 @@ type CheckFetchResult = {
   debug?: string;
 };
 
+/** Response shape for `POST /snap/tx/insights/:id` (approved request detail). */
 type RequestDetailResponse = {
   id?: number;
   transaction?: {
@@ -654,6 +952,12 @@ type RequestDetailResponse = {
   };
 };
 
+/**
+ * Fetches request details with `POST /snap/tx/insights/:id` using a Bearer token (with refresh on 401).
+ *
+ * @param requestId - Cerberus request id.
+ * @returns Parsed detail JSON, or `null` on failure.
+ */
 async function getRequestByIdBySnapAuth(
   requestId: number,
 ): Promise<RequestDetailResponse | null> {
@@ -692,11 +996,19 @@ async function getRequestByIdBySnapAuth(
       return null;
     }
     return (await response.json()) as RequestDetailResponse;
-  } catch {
+  } catch (error) {
+    getErrorMessage(error);
     return null;
   }
 }
 
+/**
+ * Calls `POST /snap/tx/insights/:requestId/post-signed` with a Bearer token after the user submits a tx hash.
+ *
+ * @param requestId - Cerberus request id.
+ * @param transactionHash - On-chain transaction hash.
+ * @returns Success flag or error message.
+ */
 async function postSignedTx(
   requestId: number,
   transactionHash: string,
@@ -706,7 +1018,10 @@ async function postSignedTx(
   }
   const accessToken = await getStoredAccessToken();
   if (!accessToken) {
-    return { ok: false, error: 'Please log in to Shogun Safe in the settings.' };
+    return {
+      ok: false,
+      error: 'Please log in to Shogun Safe in the settings.',
+    };
   }
   const url = `${REQUESTS_URL}/snap/tx/insights/${requestId}/post-signed`;
   const bodyPayload = {
@@ -753,6 +1068,12 @@ async function postSignedTx(
   }
 }
 
+/**
+ * Builds `eth_sendTransaction`-style parameters from parsed Ethereum transaction fields.
+ *
+ * @param parsed - Parsed transaction fragment from request detail.
+ * @returns Tx params for signing, or `null` if required fields are missing or chain is not Ethereum.
+ */
 function buildTxParamsFromParsed(
   parsed: NonNullable<RequestDetailResponse['transaction']>['parsed'],
 ): {
@@ -768,10 +1089,9 @@ function buildTxParamsFromParsed(
     return null;
   }
   const valueWei = parsed.valueWei ?? '0';
-  const valueHex =
-    valueWei.startsWith('0x')
-      ? valueWei
-      : `0x${BigInt(valueWei).toString(16)}`;
+  const valueHex = valueWei.startsWith('0x')
+    ? valueWei
+    : `0x${BigInt(valueWei).toString(16)}`;
   const gasLimitHex = parsed.gasLimit?.startsWith('0x')
     ? parsed.gasLimit
     : parsed.gasLimit
@@ -790,15 +1110,24 @@ function buildTxParamsFromParsed(
     return null;
   }
   const toAddress = parsed.to.trim();
-  const toHex =
-    toAddress.startsWith('0x') ? toAddress : `0x${toAddress}`;
+  const toHex = toAddress.startsWith('0x') ? toAddress : `0x${toAddress}`;
   if (toHex.length !== 42) {
     return null;
   }
+  /**
+   * Converts a decimal Gwei string to hex wei, or `undefined` if invalid or empty.
+   *
+   * @param gweiStr - Gwei value as a string from parsed data.
+   * @returns Hex-encoded wei, or `undefined`.
+   */
   const gweiToWeiHex = (gweiStr: string | undefined): string | undefined => {
-    if (gweiStr == null || gweiStr === '') return undefined;
+    if (gweiStr == null || gweiStr === '') {
+      return undefined;
+    }
     const gwei = Number(gweiStr);
-    if (!Number.isFinite(gwei)) return undefined;
+    if (!Number.isFinite(gwei)) {
+      return undefined;
+    }
     const wei = BigInt(Math.floor(gwei * 1e9));
     return `0x${wei.toString(16)}`;
   };
@@ -813,17 +1142,29 @@ function buildTxParamsFromParsed(
   } = {
     to: toHex,
     value: valueHex,
-    data: parsed.inputData?.startsWith('0x') ? parsed.inputData : `0x${parsed.inputData ?? ''}`,
+    data: parsed.inputData?.startsWith('0x')
+      ? parsed.inputData
+      : `0x${parsed.inputData ?? ''}`,
     gasLimit: gasLimitHex,
     chainId: chainIdHex,
   };
   const maxFeePerGas = gweiToWeiHex(parsed.maxFeePerGasGwei);
   const maxPriorityFeePerGas = gweiToWeiHex(parsed.maxPriorityFeePerGasGwei);
-  if (maxFeePerGas != null) base.maxFeePerGas = maxFeePerGas;
-  if (maxPriorityFeePerGas != null) base.maxPriorityFeePerGas = maxPriorityFeePerGas;
+  if (maxFeePerGas != null) {
+    base.maxFeePerGas = maxFeePerGas;
+  }
+  if (maxPriorityFeePerGas != null) {
+    base.maxPriorityFeePerGas = maxPriorityFeePerGas;
+  }
   return base;
 }
 
+/**
+ * Fetches current check progress with `POST /snap/tx/insights/:id/checks`.
+ *
+ * @param requestId - Cerberus request id.
+ * @returns Progress payload or a debug message on failure.
+ */
 const getChecks = async (requestId: number): Promise<CheckFetchResult> => {
   const accessToken = await getStoredAccessToken();
   if (!accessToken) {
@@ -863,11 +1204,20 @@ const getChecks = async (requestId: number): Promise<CheckFetchResult> => {
       };
     }
     return { progress: (await response.json()) as CheckProgress };
-  } catch {
+  } catch (error) {
+    getErrorMessage(error);
     return { debug: 'POST /snap/tx/insights/checks failed (fetch error)' };
   }
 };
 
+/**
+ * Polls `getChecks` until a non-running terminal status or timeout.
+ *
+ * @param requestId - Cerberus request id.
+ * @param timeoutMs - Max time to poll in milliseconds.
+ * @param intervalMs - Delay between polls in milliseconds.
+ * @returns Last non-preparation progress, a timeout marker with debug, or `null`.
+ */
 const pollChecks = async (
   requestId: number,
   timeoutMs = 30 * 1000,
@@ -879,7 +1229,7 @@ const pollChecks = async (
 
   while (Date.now() - startedAt < timeoutMs) {
     const result = await getChecks(requestId);
-    const progress = result.progress;
+    const { progress } = result;
     if (result.debug) {
       lastDebug = result.debug;
     }
@@ -899,9 +1249,20 @@ const pollChecks = async (
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
 
-  return lastProgress ?? (lastDebug ? { status: 'timeout', debug: lastDebug } as CheckProgress : null);
+  return (
+    lastProgress ??
+    (lastDebug
+      ? ({ status: 'timeout', debug: lastDebug } as CheckProgress)
+      : null)
+  );
 };
 
+/**
+ * Formats a wei hex string as a decimal ETH string (up to 6 fractional digits).
+ *
+ * @param value - Hex or decimal wei string.
+ * @returns Human-readable ETH amount, or the original string on parse failure.
+ */
 const formatHexWeiToEth = (value?: string) => {
   if (!value) {
     return '0';
@@ -922,11 +1283,18 @@ const formatHexWeiToEth = (value?: string) => {
     }
 
     return `${whole.toString()}.${fractionString.slice(0, 6)}`;
-  } catch {
+  } catch (error) {
+    getErrorMessage(error);
     return value;
   }
 };
 
+/**
+ * Short string preview for signature / typed-data payloads (legacy helper).
+ *
+ * @param data - Raw data of unknown shape.
+ * @returns Truncated string or a fixed label.
+ */
 const formatSignatureData = (data: unknown) => {
   if (typeof data === 'string') {
     return data.length > 24 ? `${data.slice(0, 24)}…` : data;
@@ -935,6 +1303,12 @@ const formatSignatureData = (data: unknown) => {
   return 'Typed data';
 };
 
+/**
+ * Maps a per-check status code to a short label for the insight UI.
+ *
+ * @param status - Raw check status from the API.
+ * @returns Display label.
+ */
 const formatCheckStatus = (status?: string) => {
   switch (status) {
     case 'passed':
@@ -974,6 +1348,12 @@ const formatCheckStatus = (status?: string) => {
   }
 };
 
+/**
+ * Picks a Snap text color token for a check status.
+ *
+ * @param status - Raw check status.
+ * @returns `Text` color token name.
+ */
 const getTextColorByCheckStatus = (status?: string): TextColors => {
   if (!status) {
     return 'default';
@@ -988,7 +1368,11 @@ const getTextColorByCheckStatus = (status?: string): TextColors => {
   if (status === 'approved' || status === 'passed') {
     return 'success';
   }
-  if (status === 'approval_pending' || status === 'pending' || status === 'running') {
+  if (
+    status === 'approval_pending' ||
+    status === 'pending' ||
+    status === 'running'
+  ) {
     return 'warning';
   }
   if (
@@ -1003,7 +1387,15 @@ const getTextColorByCheckStatus = (status?: string): TextColors => {
   return 'default';
 };
 
-const getSeverityByCheckStatus = (status?: string): 'success' | 'warning' | 'danger' | 'info' => {
+/**
+ * Picks a banner severity for the aggregate check status.
+ *
+ * @param status - Raw aggregate check status.
+ * @returns Banner severity level.
+ */
+const getSeverityByCheckStatus = (
+  status?: string,
+): 'success' | 'warning' | 'danger' | 'info' => {
   if (!status) {
     return 'info';
   }
@@ -1017,7 +1409,11 @@ const getSeverityByCheckStatus = (status?: string): 'success' | 'warning' | 'dan
   if (status === 'approved' || status === 'passed') {
     return 'success';
   }
-  if (status === 'approval_pending' || status === 'pending' || status === 'running') {
+  if (
+    status === 'approval_pending' ||
+    status === 'pending' ||
+    status === 'running'
+  ) {
     return 'warning';
   }
   if (
@@ -1072,6 +1468,7 @@ type ShowcaseSummary = {
   refreshSuccess?: boolean;
 };
 
+/** Mutable portion of the insight UI derived from `getChecks` (kept in context so failed refresh keeps prior values). */
 type LastMutableSummary = Pick<
   ShowcaseSummary,
   | 'checkStatusLabel'
@@ -1085,6 +1482,7 @@ type LastMutableSummary = Pick<
   | 'debugValue'
 >;
 
+/** Context for the interactive transaction insight UI; read on Refresh in `onUserInput`. */
 type TxInsightContext = {
   kind: 'tx-insight';
   requestId: number;
@@ -1113,21 +1511,30 @@ type TxInsightContext = {
   lastMutableSummary?: LastMutableSummary;
 };
 
+/**
+ * Builds the mutable `ShowcaseSummary` fields from a `getChecks` result (shared by refresh and first paint).
+ *
+ * @param checksResult - Result of `getChecks` (progress or debug).
+ * @param requestId - Cerberus request id.
+ * @returns Mutable summary fields plus optional `refreshError` when the fetch fails.
+ */
 async function buildMutableSummaryFromChecks(
   checksResult: CheckFetchResult,
   requestId: number,
-): Promise<Pick<
-  ShowcaseSummary,
-  | 'checkStatusLabel'
-  | 'checkStatusValue'
-  | 'checkStatusRawValue'
-  | 'signedTxHash'
-  | 'igChecks'
-  | 'egChecks'
-  | 'vgChecks'
-  | 'debugLabel'
-  | 'debugValue'
-> & { refreshError?: string }> {
+): Promise<
+  Pick<
+    ShowcaseSummary,
+    | 'checkStatusLabel'
+    | 'checkStatusValue'
+    | 'checkStatusRawValue'
+    | 'signedTxHash'
+    | 'igChecks'
+    | 'egChecks'
+    | 'vgChecks'
+    | 'debugLabel'
+    | 'debugValue'
+  > & { refreshError?: string }
+> {
   const debugLines: string[] = [
     `requestId=${requestId} (Refresh)`,
     `requestsUrl=${REQUESTS_URL}`,
@@ -1146,13 +1553,15 @@ async function buildMutableSummaryFromChecks(
       refreshError: 'Could not fetch latest status. See Debug for details.',
     };
   }
-  const progress = checksResult.progress;
+  const { progress } = checksResult;
   const base = toChecksSummary(progress);
   let signedTxHash: string | undefined;
   if (isOnchainStatus(base.checkStatusRawValue)) {
     const requestDetail = await getRequestByIdBySnapAuth(requestId);
     const txHash = requestDetail?.transaction?.txHash?.trim();
-    if (txHash) signedTxHash = txHash;
+    if (txHash) {
+      signedTxHash = txHash;
+    }
   }
   if (progress.status) {
     debugLines.push(`progressStatus=${progress.status}`);
@@ -1165,6 +1574,12 @@ async function buildMutableSummaryFromChecks(
   };
 }
 
+/**
+ * Pretty-prints unknown transaction data for the Raw data section (JSON pretty-printed when object-like).
+ *
+ * @param data - Transaction or RPC payload.
+ * @returns String for display.
+ */
 const formatRawData = (data: unknown) => {
   try {
     if (typeof data === 'string') {
@@ -1172,11 +1587,18 @@ const formatRawData = (data: unknown) => {
     }
 
     return JSON.stringify(data, null, 2);
-  } catch {
+  } catch (error) {
+    getErrorMessage(error);
     return String(data);
   }
 };
 
+/**
+ * Compact JSON serialization for the serialized transaction line.
+ *
+ * @param data - Transaction or RPC payload.
+ * @returns One-line or compact JSON string.
+ */
 const serializeRawData = (data: unknown) => {
   try {
     if (typeof data === 'string') {
@@ -1184,14 +1606,28 @@ const serializeRawData = (data: unknown) => {
     }
 
     return JSON.stringify(data);
-  } catch {
+  } catch (error) {
+    getErrorMessage(error);
     return String(data);
   }
 };
 
+/**
+ * Truncates a long string for debug / raw-data display.
+ *
+ * @param value - Input string.
+ * @param maxLength - Max length before truncation.
+ * @returns Truncated string with ellipsis when needed.
+ */
 const truncate = (value: string, maxLength = 400) =>
   value.length > maxLength ? `${value.slice(0, maxLength)}…` : value;
 
+/**
+ * Parses a CAIP-2 chain id string (e.g. `eip155:1`) into a bigint chain id.
+ *
+ * @param chainId - CAIP-2 chain id from MetaMask.
+ * @returns Numeric chain id, or `null` if invalid.
+ */
 const parseCaip2ChainId = (chainId: string) => {
   const match = chainId.match(/^eip155:(\d+)$/u);
   if (!match) {
@@ -1204,11 +1640,18 @@ const parseCaip2ChainId = (chainId: string) => {
       return null;
     }
     return BigInt(chainPart);
-  } catch {
+  } catch (error) {
+    getErrorMessage(error);
     return null;
   }
 };
 
+/**
+ * Safely parses an optional hex/decimal string to `bigint`.
+ *
+ * @param value - Hex or decimal string (optional).
+ * @returns bigint or `undefined` if missing or invalid.
+ */
 const toBigInt = (value?: string) => {
   if (!value) {
     return undefined;
@@ -1216,16 +1659,30 @@ const toBigInt = (value?: string) => {
 
   try {
     return BigInt(value);
-  } catch {
+  } catch (error) {
+    getErrorMessage(error);
     return undefined;
   }
 };
 
+/**
+ * Type guard: transaction includes EIP-1559 fee fields.
+ *
+ * @param tx - Transaction from the Snap SDK.
+ * @returns Whether `tx` is EIP-1559-shaped.
+ */
 const isEip1559Transaction = (
   tx: Transaction,
 ): tx is Transaction & { maxFeePerGas: string; maxPriorityFeePerGas: string } =>
   'maxFeePerGas' in tx && 'maxPriorityFeePerGas' in tx;
 
+/**
+ * Serializes a transaction to a hex RLP string for hashing and API calls.
+ *
+ * @param transaction - Transaction from MetaMask.
+ * @param chainId - CAIP-2 chain id string.
+ * @returns Serialized RLP hex, or `null` on failure.
+ */
 const serializeTransactionRlp = (transaction: Transaction, chainId: string) => {
   try {
     const parsedChainId = parseCaip2ChainId(chainId);
@@ -1263,11 +1720,17 @@ const serializeTransactionRlp = (transaction: Transaction, chainId: string) => {
         );
 
     return bufferToHex(tx.serialize());
-  } catch {
+  } catch (error) {
+    getErrorMessage(error);
     return null;
   }
 };
 
+/**
+ * Insight shown when the user is not logged in (does not call `postRawTransaction`; prompts to open settings).
+ *
+ * @returns JSX instructing the user to log in via the Snap settings home page.
+ */
 function renderNotLoggedInInsight(): JSX.Element {
   return (
     <Box>
@@ -1279,14 +1742,20 @@ function renderNotLoggedInInsight(): JSX.Element {
         </Text>
         <Text>
           Open the <Bold>Snaps</Bold> menu in MetaMask, select{' '}
-          <Bold>Shogun Safe</Bold>, and log in with your email and password on the
-          settings (Home) page.
+          <Bold>Shogun Safe</Bold>, and log in with your email and password on
+          the settings (Home) page.
         </Text>
       </Banner>
     </Box>
   );
 }
 
+/**
+ * Renders the main transaction insight “showcase” panel (summary, checks, refresh, debug).
+ *
+ * @param summary - Aggregated fields to display.
+ * @returns JSX tree for the insight UI.
+ */
 const renderShowcase = (summary: ShowcaseSummary) => (
   <Box>
     <Heading size="lg">{summary.title}</Heading>
@@ -1299,24 +1768,41 @@ const renderShowcase = (summary: ShowcaseSummary) => (
     ) : null}
     {summary.refreshError ? (
       <Banner title="Refresh failed" severity="danger">
-        <Text><Bold>{summary.refreshError}</Bold></Text>
+        <Text>
+          <Bold>{summary.refreshError}</Bold>
+        </Text>
       </Banner>
     ) : null}
     {summary.refreshSuccess ? (
       <Banner title="Refresh success" severity="success">
-        <Text><Bold>Latest status has been loaded.</Bold></Text>
+        <Text>
+          <Bold>Latest status has been loaded.</Bold>
+        </Text>
       </Banner>
     ) : null}
     {summary.signedTxHash ? (
       <Banner title="NOTICE" severity="warning">
-        <Text><Bold>This request&apos;s transaction has been signed.</Bold></Text>
-        <Text><Bold>TxHash: {summary.signedTxHash}</Bold></Text>
-        <Text><Bold>Please check the result on the dashboard or block chain explorer.</Bold></Text>
+        <Text>
+          <Bold>This request&apos;s transaction has been signed.</Bold>
+        </Text>
+        <Text>
+          <Bold>TxHash: {summary.signedTxHash}</Bold>
+        </Text>
+        <Text>
+          <Bold>
+            Please check the result on the dashboard or block chain explorer.
+          </Bold>
+        </Text>
       </Banner>
     ) : null}
     {summary.checkStatusValue ? (
-      <Banner title={summary.checkStatusLabel ?? 'Check status'} severity={getSeverityByCheckStatus(summary.checkStatusRawValue)} >
-        <Text><Bold>{summary.checkStatusValue}</Bold></Text>
+      <Banner
+        title={summary.checkStatusLabel ?? 'Check status'}
+        severity={getSeverityByCheckStatus(summary.checkStatusRawValue)}
+      >
+        <Text>
+          <Bold>{summary.checkStatusValue}</Bold>
+        </Text>
       </Banner>
     ) : null}
     {summary.igChecks && summary.igChecks.length > 0 ? (
@@ -1324,7 +1810,9 @@ const renderShowcase = (summary: ShowcaseSummary) => (
         <Heading size="sm">IG check</Heading>
         {summary.igChecks.map((item) => (
           <Row key={`ig-${item.label}`} label={item.label}>
-            <Text color={getTextColorByCheckStatus(item.status)}>{formatCheckStatus(item.status)}</Text>
+            <Text color={getTextColorByCheckStatus(item.status)}>
+              {formatCheckStatus(item.status)}
+            </Text>
           </Row>
         ))}
       </Section>
@@ -1334,7 +1822,9 @@ const renderShowcase = (summary: ShowcaseSummary) => (
         <Heading size="sm">EG check</Heading>
         {summary.egChecks.map((item) => (
           <Row key={`eg-${item.label}`} label={item.label}>
-            <Text color={getTextColorByCheckStatus(item.status)}>{formatCheckStatus(item.status)}</Text>
+            <Text color={getTextColorByCheckStatus(item.status)}>
+              {formatCheckStatus(item.status)}
+            </Text>
           </Row>
         ))}
       </Section>
@@ -1344,7 +1834,9 @@ const renderShowcase = (summary: ShowcaseSummary) => (
         <Heading size="sm">VG check</Heading>
         {summary.vgChecks.map((item) => (
           <Row key={`vg-${item.label}`} label={item.label}>
-            <Text color={getTextColorByCheckStatus(item.status)}>{formatCheckStatus(item.status)}</Text>
+            <Text color={getTextColorByCheckStatus(item.status)}>
+              {formatCheckStatus(item.status)}
+            </Text>
           </Row>
         ))}
       </Section>
@@ -1377,6 +1869,15 @@ const renderShowcase = (summary: ShowcaseSummary) => (
   </Box>
 );
 
+/**
+ * MetaMask transaction insight hook: runs checks, builds the showcase UI, and stores refresh context.
+ *
+ * @param args - Handler arguments from the Snap runtime.
+ * @param args.transaction - Pending transaction.
+ * @param args.chainId - CAIP-2 chain id.
+ * @param args.transactionOrigin - Originating site URL when available.
+ * @returns Interface id and severity for the insight panel.
+ */
 export const onTransaction: OnTransactionHandler = async ({
   transaction,
   chainId,
@@ -1421,9 +1922,12 @@ export const onTransaction: OnTransactionHandler = async ({
         egChecks = checksPart.egChecks;
         vgChecks = checksPart.vgChecks;
         if (isOnchainStatus(checksPart.checkStatusRawValue)) {
-          const requestDetail = await getRequestByIdBySnapAuth(approvedRequestId);
+          const requestDetail =
+            await getRequestByIdBySnapAuth(approvedRequestId);
           const txHash = requestDetail?.transaction?.txHash?.trim();
-          if (txHash) signedTxHash = txHash;
+          if (txHash) {
+            signedTxHash = txHash;
+          }
         }
       }
       debugLines.push(`requestId=${approvedRequestId} (Approved)`);
@@ -1432,6 +1936,11 @@ export const onTransaction: OnTransactionHandler = async ({
         debugLines.push(`progressStatus=${checksResult.progress.status}`);
       }
     } else {
+      /**
+       * Submits raw tx, starts checks, and polls until completion or timeout.
+       *
+       * @returns Progress and request id, or a debug-only object on failure.
+       */
       const runChecks = async () => {
         const result = await postRawTransaction({
           rawTx: rlpHex,
@@ -1442,7 +1951,9 @@ export const onTransaction: OnTransactionHandler = async ({
         });
 
         if (!result.request?.id) {
-          return { debug: result.debug ?? 'POST /snap/tx/insights failed (no id)' };
+          return {
+            debug: result.debug ?? 'POST /snap/tx/insights failed (no id)',
+          };
         }
 
         await startChecks(result.request.id);
@@ -1480,7 +1991,9 @@ export const onTransaction: OnTransactionHandler = async ({
         );
       }
       if (result?.progress && 'debug' in result.progress) {
-        debugLines.push(`pollError=${(result.progress as { debug?: string }).debug}`);
+        debugLines.push(
+          `pollError=${(result.progress as { debug?: string }).debug}`,
+        );
       }
       if (result?.debug) {
         debugLines.push(`error=${result.debug}`);
@@ -1574,6 +2087,13 @@ export const onTransaction: OnTransactionHandler = async ({
   };
 };
 
+/**
+ * Handles button clicks on interactive interfaces (Cerberus home flows and tx insight refresh).
+ *
+ * @param args - User input event payload from the Snap runtime.
+ * @param args.id - Interface id.
+ * @param args.event - Button click or other input event.
+ */
 export const onUserInput: OnUserInputHandler = async ({ id, event }) => {
   if (event.type !== UserInputEventType.ButtonClickEvent) {
     return;
@@ -1587,7 +2107,10 @@ export const onUserInput: OnUserInputHandler = async ({ id, event }) => {
   if (homeCtx?.kind === 'cerberus-home') {
     if (event.name === 'close' && homeCtx.fromDialog) {
       const value = homeCtx.step === 'logged_in';
-      await snap.request({ method: 'snap_resolveInterface', params: { id, value } });
+      await snap.request({
+        method: 'snap_resolveInterface',
+        params: { id, value },
+      });
       return;
     }
     if (homeCtx.step === 'login' && event.name === 'login') {
@@ -1602,13 +2125,17 @@ export const onUserInput: OnUserInputHandler = async ({ id, event }) => {
           ? (state['cerberus-login'] as Record<string, unknown>)
           : state;
       const email = typeof formState?.email === 'string' ? formState.email : '';
-      const password = typeof formState?.password === 'string' ? formState.password : '';
+      const password =
+        typeof formState?.password === 'string' ? formState.password : '';
       if (!email.trim()) {
         await snap.request({
           method: 'snap_updateInterface',
           params: {
             id,
-            ui: renderCerberusHomeLoginWithError('Please enter your email.', homeCtx.fromDialog),
+            ui: renderCerberusHomeLoginWithError(
+              'Please enter your email.',
+              homeCtx.fromDialog,
+            ),
           },
         });
         return;
@@ -1624,7 +2151,11 @@ export const onUserInput: OnUserInputHandler = async ({ id, event }) => {
         };
         await snap.request({
           method: 'snap_updateInterface',
-          params: { id, ui: renderCerberusHome2FA(result.mfaMethod), context: newCtx },
+          params: {
+            id,
+            ui: renderCerberusHome2FA(result.mfaMethod),
+            context: newCtx,
+          },
         });
         return;
       }
@@ -1637,7 +2168,10 @@ export const onUserInput: OnUserInputHandler = async ({ id, event }) => {
           kind: 'cerberus-home',
           step: 'logged_in',
           user: result.session.user
-            ? { email: result.session.user.email, displayName: result.session.user.displayName }
+            ? {
+                email: result.session.user.email,
+                displayName: result.session.user.displayName,
+              }
             : undefined,
           fromDialog: homeCtx.fromDialog,
         };
@@ -1645,7 +2179,11 @@ export const onUserInput: OnUserInputHandler = async ({ id, event }) => {
           method: 'snap_updateInterface',
           params: {
             id,
-            ui: renderCerberusHomeLoggedIn(newCtx.user, mfaStatus, newCtx.fromDialog),
+            ui: renderCerberusHomeLoggedIn(
+              newCtx.user,
+              mfaStatus,
+              newCtx.fromDialog,
+            ),
             context: newCtx,
           },
         });
@@ -1655,7 +2193,10 @@ export const onUserInput: OnUserInputHandler = async ({ id, event }) => {
         method: 'snap_updateInterface',
         params: {
           id,
-          ui: renderCerberusHomeLoginWithError(result.message, homeCtx.fromDialog),
+          ui: renderCerberusHomeLoginWithError(
+            result.message,
+            homeCtx.fromDialog,
+          ),
         },
       });
       return;
@@ -1689,7 +2230,8 @@ export const onUserInput: OnUserInputHandler = async ({ id, event }) => {
         state['cerberus-2fa'] != null
           ? (state['cerberus-2fa'] as Record<string, unknown>)
           : state;
-      const code = typeof formState2fa?.code === 'string' ? formState2fa.code : '';
+      const code =
+        typeof formState2fa?.code === 'string' ? formState2fa.code : '';
       const result = await auth2faVerify(homeCtx.tempToken, code);
       if (result.type === 'session') {
         await updateCerberusState({
@@ -1700,7 +2242,10 @@ export const onUserInput: OnUserInputHandler = async ({ id, event }) => {
           kind: 'cerberus-home',
           step: 'logged_in',
           user: result.session.user
-            ? { email: result.session.user.email, displayName: result.session.user.displayName }
+            ? {
+                email: result.session.user.email,
+                displayName: result.session.user.displayName,
+              }
             : undefined,
           fromDialog: homeCtx.fromDialog,
         };
@@ -1708,7 +2253,11 @@ export const onUserInput: OnUserInputHandler = async ({ id, event }) => {
           method: 'snap_updateInterface',
           params: {
             id,
-            ui: renderCerberusHomeLoggedIn(newCtx.user, mfaStatus, newCtx.fromDialog),
+            ui: renderCerberusHomeLoggedIn(
+              newCtx.user,
+              mfaStatus,
+              newCtx.fromDialog,
+            ),
             context: newCtx,
           },
         });
@@ -1752,7 +2301,10 @@ export const onUserInput: OnUserInputHandler = async ({ id, event }) => {
         state['cerberus-2fa-recovery'] != null
           ? (state['cerberus-2fa-recovery'] as Record<string, unknown>)
           : state;
-      const recoveryCode = typeof formStateRecovery?.recoveryCode === 'string' ? formStateRecovery.recoveryCode : '';
+      const recoveryCode =
+        typeof formStateRecovery?.recoveryCode === 'string'
+          ? formStateRecovery.recoveryCode
+          : '';
       const result = await auth2faRecovery(homeCtx.tempToken, recoveryCode);
       if (result.type === 'session') {
         await updateCerberusState({
@@ -1763,7 +2315,10 @@ export const onUserInput: OnUserInputHandler = async ({ id, event }) => {
           kind: 'cerberus-home',
           step: 'logged_in',
           user: result.session.user
-            ? { email: result.session.user.email, displayName: result.session.user.displayName }
+            ? {
+                email: result.session.user.email,
+                displayName: result.session.user.displayName,
+              }
             : undefined,
           fromDialog: homeCtx.fromDialog,
         };
@@ -1771,7 +2326,11 @@ export const onUserInput: OnUserInputHandler = async ({ id, event }) => {
           method: 'snap_updateInterface',
           params: {
             id,
-            ui: renderCerberusHomeLoggedIn(newCtx.user, mfaStatus, newCtx.fromDialog),
+            ui: renderCerberusHomeLoggedIn(
+              newCtx.user,
+              mfaStatus,
+              newCtx.fromDialog,
+            ),
             context: newCtx,
           },
         });
@@ -1781,7 +2340,10 @@ export const onUserInput: OnUserInputHandler = async ({ id, event }) => {
         method: 'snap_updateInterface',
         params: {
           id,
-          ui: renderCerberusHome2FARecoveryWithError(homeCtx.mfaMethod, result.message),
+          ui: renderCerberusHome2FARecoveryWithError(
+            homeCtx.mfaMethod,
+            result.message,
+          ),
         },
       });
       return;
@@ -1794,7 +2356,10 @@ export const onUserInput: OnUserInputHandler = async ({ id, event }) => {
           params: {
             id,
             ui: renderCerberusHomeLogin(),
-            context: { kind: 'cerberus-home', step: 'login' } as CerberusHomeContext,
+            context: {
+              kind: 'cerberus-home',
+              step: 'login',
+            } as CerberusHomeContext,
           },
         });
         return;
@@ -1820,7 +2385,10 @@ export const onUserInput: OnUserInputHandler = async ({ id, event }) => {
           method: 'snap_updateInterface',
           params: {
             id,
-            ui: renderCerberusHomeLoginWithError(`Logout error: ${logoutResult.error ?? ''}`, homeCtx.fromDialog),
+            ui: renderCerberusHomeLoginWithError(
+              `Logout error: ${logoutResult.error ?? ''}`,
+              homeCtx.fromDialog,
+            ),
             context: newCtx,
           },
         });
@@ -1837,7 +2405,7 @@ export const onUserInput: OnUserInputHandler = async ({ id, event }) => {
     }
     const { baseSummary, requestId, lastMutableSummary } = context;
 
-    // Refresh 中: 既存表示（lastMutableSummary）を維持し、ボタンのみ「Refreshing...」にする
+    // While refreshing: keep last mutable content; only the button shows "Refreshing...".
     const refreshingSummary: ShowcaseSummary = {
       ...baseSummary,
       ...(lastMutableSummary ?? {}),
@@ -1939,13 +2507,22 @@ export const onUserInput: OnUserInputHandler = async ({ id, event }) => {
   });
 };
 
+/**
+ * Handles JSON-RPC methods invoked via `wallet_invokeSnap` (login dialog, post-signed tx, sign-approved tx).
+ *
+ * @param args - RPC handler arguments.
+ * @param args.request - JSON-RPC request object.
+ * @returns Method-specific result (e.g. dialog outcome or tx params).
+ * @throws If the method is missing, invalid, or prerequisites fail.
+ */
 export const onRpcRequest: OnRpcRequestHandler = async ({ request }) => {
   switch (request.method) {
     case 'showLoginScreen': {
       const state = await getCerberusState();
       const session = state?.[CERBERUS_SESSION_KEY];
       const hasSession =
-        typeof session?.accessToken === 'string' && session.accessToken.length > 0;
+        typeof session?.accessToken === 'string' &&
+        session.accessToken.length > 0;
       let ui: JSX.Element;
       let context: CerberusHomeContext;
       if (hasSession && session) {
@@ -1973,10 +2550,12 @@ export const onRpcRequest: OnRpcRequestHandler = async ({ request }) => {
       });
     }
     case 'post-signed-tx': {
-      const params = request.params as {
-        requestId?: number;
-        transactionHash?: string;
-      } | undefined;
+      const params = request.params as
+        | {
+            requestId?: number;
+            transactionHash?: string;
+          }
+        | undefined;
       const requestId =
         typeof params?.requestId === 'number' ? params.requestId : undefined;
       const transactionHash =
@@ -2009,9 +2588,9 @@ export const onRpcRequest: OnRpcRequestHandler = async ({ request }) => {
           'sign-approved-tx: failed to get request or missing transaction.rawData',
         );
       }
-      const rawData = requestDetail.transaction.rawData;
+      const { rawData } = requestDetail.transaction;
       await saveTxHashRequestId(rawData, requestId);
-      const parsed = requestDetail.transaction.parsed;
+      const { parsed } = requestDetail.transaction;
       const txParams = buildTxParamsFromParsed(parsed);
       if (!txParams) {
         throw new Error(

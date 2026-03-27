@@ -1,6 +1,6 @@
-/* eslint-disable prefer-destructuring */
-/* eslint-disable prettier/prettier */
-/* eslint-disable jsdoc/require-jsdoc */
+/**
+ * Input shape compatible with `CheckProgress` (the Snap index passes `CheckProgress` here).
+ */
 export type CheckProgressInput = {
   status?: string;
   checks?: {
@@ -24,11 +24,20 @@ export type ToChecksSummaryResult = {
   vgChecks?: { label: string; status?: string }[];
 };
 
+/**
+ * Maps a raw API check status to a short human-readable label for the transaction insight UI.
+ * @param status - Optional raw status from the checks API.
+ * @returns Localized-style label string (e.g. `Preparing`, `Approved`).
+ */
 export function formatSummaryStatus(status?: string): string {
   if (!status) {
     return 'Unverified';
   }
-  if (status === 'preparation' || status === 'running' || status === 'pending') {
+  if (
+    status === 'preparation' ||
+    status === 'running' ||
+    status === 'pending'
+  ) {
     return 'Preparing';
   }
   if (status === 'approval_pending') {
@@ -59,14 +68,21 @@ export function formatSummaryStatus(status?: string): string {
   return status;
 }
 
-export function toChecksSummary(progress: CheckProgressInput): ToChecksSummaryResult {
+/**
+ * Pure function: converts `CheckProgress`-like input into showcase summary fields (easy to unit test).
+ * @param progress - Check progress payload from the API or polling layer.
+ * @returns Structured labels and per-check rows for IG / EG / VG sections.
+ */
+export function toChecksSummary(
+  progress: CheckProgressInput,
+): ToChecksSummaryResult {
   const checkStatusRawValue = progress.status ?? '';
   const checkStatusValue = formatSummaryStatus(progress.status);
   let igChecks: ToChecksSummaryResult['igChecks'];
   let egChecks: ToChecksSummaryResult['egChecks'];
   let vgChecks: ToChecksSummaryResult['vgChecks'];
   if (progress.checks) {
-    const checks = progress.checks;
+    const { checks } = progress;
     igChecks = [
       { label: 'Parse', status: checks.parseCheck },
       { label: 'Whitelist', status: checks.whitelistCheck },

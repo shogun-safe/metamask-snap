@@ -1,3 +1,6 @@
+/**
+ * @file Smoke tests for the Snap JSON-RPC handler.
+ */
 import { expect } from '@jest/globals';
 import { installSnap } from '@metamask/snaps-jest';
 

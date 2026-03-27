@@ -1,6 +1,9 @@
 import type { SnapConfig } from '@metamask/snaps-cli';
 import { resolve } from 'path';
 
+/**
+ * MetaMask Snaps CLI build configuration: entry bundle, dev server, env, and polyfills.
+ */
 const config: SnapConfig = {
   input: resolve(__dirname, 'src/index.tsx'),
   server: {

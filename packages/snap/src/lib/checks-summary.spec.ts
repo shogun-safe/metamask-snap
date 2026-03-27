@@ -1,6 +1,8 @@
-/* eslint-disable prettier/prettier */
-/* eslint-disable import-x/order */
+/**
+ * @file Unit tests for {@link formatSummaryStatus} and {@link toChecksSummary}.
+ */
 import { describe, expect, it } from '@jest/globals';
+
 import {
   formatSummaryStatus,
   toChecksSummary,
@@ -65,9 +67,15 @@ describe('toChecksSummary', () => {
   });
 
   it('returns formatted status from progress.status', () => {
-    expect(toChecksSummary({ status: 'approved' }).checkStatusValue).toBe('Approved');
-    expect(toChecksSummary({ status: 'approved' }).checkStatusRawValue).toBe('approved');
-    expect(toChecksSummary({ status: 'running' }).checkStatusValue).toBe('Preparing');
+    expect(toChecksSummary({ status: 'approved' }).checkStatusValue).toBe(
+      'Approved',
+    );
+    expect(toChecksSummary({ status: 'approved' }).checkStatusRawValue).toBe(
+      'approved',
+    );
+    expect(toChecksSummary({ status: 'running' }).checkStatusValue).toBe(
+      'Preparing',
+    );
   });
 
   it('returns igChecks, egChecks, vgChecks when progress.checks is present', () => {
@@ -115,7 +123,9 @@ describe('toChecksSummary', () => {
       { label: 'LLM', status: undefined },
       { label: 'Policy', status: undefined },
     ]);
-    expect(result.egChecks).toEqual([{ label: 'Blacklist', status: undefined }]);
+    expect(result.egChecks).toEqual([
+      { label: 'Blacklist', status: undefined },
+    ]);
     expect(result.vgChecks).toEqual([
       { label: 'Approve 1', status: undefined },
       { label: 'Approve 2', status: undefined },
