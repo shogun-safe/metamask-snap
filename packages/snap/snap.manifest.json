@@ -1,5 +1,5 @@
 {
-  "version": "0.1.0",
+  "version": "0.1.2-beta.0",
   "description": "Shogun Safe security Snap for MetaMask: login, transaction risk checks, approval-status insights, and signed-transaction reporting through the Shogun Safe API.",
   "proposedName": "Shogun Safe",
   "repository": {
@@ -7,7 +7,7 @@
     "url": "https://github.com/shogun-safe/metamask-snap.git"
   },
   "source": {
-    "shasum": "fjzMps4ehhNhlM6K1xEQq/9UBqTq0ip1zDMGROJKKkc=",
+    "shasum": "ROCOUqza4M9hu803xrzhkt5MATMBud1MSrMJV1vgpBE=",
     "location": {
       "npm": {
         "filePath": "dist/bundle.js",
